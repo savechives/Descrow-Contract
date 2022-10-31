@@ -65,7 +65,9 @@ contract Escrow is IEscrow, Ownable {
         uint8   status;         //order status, 1 paid, 2 buyer ask refund, 3 completed, 4 seller refuse dispute, 5 buyer or seller appeal, so voters can vote
         uint256 refund;         //disputeId
         uint256 modAId;         //the mod that chosen by seller
+        uint8   modAVote;       // 0 not vote, 1 agree refund, 2 disagree refund.
         uint256 modBId;         //the mod that chosen by buyer
+        uint8   modBVote;       // 0 not vote, 1 agree refund, 2 disagree refund.
         // The following info comes from app settings
         address appOwner;       //app owner
         uint8   appOwnerCommission; //commission fee for app owner
@@ -287,7 +289,9 @@ contract Escrow is IEscrow, Ownable {
         _order.refund       =   uint256(0);
         _order.status       =   uint8(1);
         _order.modAId       =   modAId;
+        _order.modAVote     =   uint8(0);
         _order.modBId       =   modBId;
+        _order.modBVote     =   uint8(0);
         _order.appOwner     =   appOwner[appId];
         _order.modCommission =   modCommission[appId];
         _order.appOwnerCommission  =   appOwnerCommission[appId];
@@ -314,7 +318,7 @@ contract Escrow is IEscrow, Ownable {
         return orderId;
     }
 
-    //confirm order received, and money will be cash out to seller
+    //confirm order received, and money will be cash out to seller's balance
     //triggled by buyer
     function confirmDone(uint256 orderId) public {
 
@@ -325,8 +329,9 @@ contract Escrow is IEscrow, Ownable {
                 orderBook[appId][orderId].status==uint8(4),
                 'Order status must be equal to just paid or refund asked or dispute refused');
 
-        // cash out money to seller
-        userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress]    =   userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress].add(orderBook[orderId].amount);
+        // cash out money to seller's balance
+        userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress]    =   
+        userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress].add(orderBook[orderId].amount);
             emit UserBalanceChanged(
                 orderBook[orderId].seller,
                 true,
@@ -336,11 +341,11 @@ contract Escrow is IEscrow, Ownable {
                 orderId
             );
 
-        // set order status to completing
+        // set order status to completed
         orderBook[orderId].status==uint8(3);
 
         //emit event
-        emit ConfirmDone(orderId);
+        emit ConfirmDone(orderBook[orderId].appId, orderId);
 
     }
 
@@ -348,68 +353,71 @@ contract Escrow is IEscrow, Ownable {
     //triggled by buyer
     function askRefund(uint256 orderId, uint256 refund) public {
 
-        require(_msgSender()==orderBook[appId][orderId].buyer,'Only buyer can make dispute');
+        require(_msgSender()==orderBook[orderId].buyer,'Only buyer can make dispute');
 
-        require(orderBook[appId][orderId].status==uint8(1)||orderBook[appId][orderId].status==uint8(2),'Order status must be equal to just paid or refund asked');
+        require(orderBook[orderId].status==uint8(1)||orderBook[orderId].status==uint8(2),
+        'Order status must be equal to just paid or refund asked');
 
-        require(block.timestamp < orderBook[appId][orderId].refundTime, "It is too late to make dispute");
+        require(block.timestamp < orderBook[orderId].refundTime, "It is too late to make dispute");
 
         require(refund > 0, "Refund amount must be bigger than 0");
 
-        require(refund <= orderBook[appId][orderId].amount, "Refund amount can not be bigger than paid amount");
+        require(refund <= orderBook[orderId].amount, "Refund amount can not be bigger than paid amount");
 
         // update order status
-        if(orderBook[appId][orderId].status==uint8(1)) {
-            orderBook[appId][orderId].status=uint8(2);
+        if(orderBook[orderId].status==uint8(1)) {
+            orderBook[orderId].status=uint8(2);
         }
         // update refund of order
-        orderBook[appId][orderId].refund=refund;
+        orderBook[orderId].refund=refund;
         // update refuse expired
-        refuseExpired[appId][orderId] = block.timestamp.add(intervalRefuse[appId]);
+        refuseExpired[orderId] = block.timestamp.add(intervalRefuse[orderBook[orderId].appId]);
         //emit event
-        emit AskRefund(appId, orderId, refund);
+        emit AskRefund(orderBook[orderId].appId, orderId, refund);
     }
 
     //cancel refund
     //triggled by buyer
-    function cancelRefund(uint256 appId, uint256 orderId) public {
+    function cancelRefund(uint256 orderId) public {
 
-        require(_msgSender()==orderBook[appId][orderId].buyer,'Only buyer can make dispute');
+        require(_msgSender()==orderBook[orderId].buyer,'Only buyer can cancel refund');
 
-        require(orderBook[appId][orderId].status==uint8(2)||orderBook[appId][orderId].status==uint8(4),'Order status must be equal to refund asked or refund refused');
+        require(orderBook[orderId].status==uint8(2)||orderBook[orderId].status==uint8(4),'Order status must be equal to refund asked or refund refused');
 
         //update order status to paid
-        orderBook[appId][orderId].status=uint8(1);
+        orderBook[orderId].status=uint8(1);
 
-        emit CancelRefund(appId, orderId);
+        emit CancelRefund(orderBook[orderId].appId, orderId);
     }
 
     //refuse refund
     //triggled by seller
-    function refuseRefund(uint256 appId, uint256 orderId) public {
+    function refuseRefund(uint256 orderId) public {
 
-        require(_msgSender()==orderBook[appId][orderId].seller,'Only seller can refuse dispute');
+        require(_msgSender()==orderBook[orderId].seller,'Only seller can refuse dispute');
 
-        require(orderBook[appId][orderId].status==uint8(2),'Order status must be equal to refund asked');
+        require(orderBook[orderId].status==uint8(2),'Order status must be equal to refund asked');
 
         //update order status to refund refused
-        orderBook[appId][orderId].status=uint8(4);
+        orderBook[orderId].status=uint8(4);
 
-        emit RefuseRefund(appId, orderId);
+        emit RefuseRefund(orderBook[orderId].appId, orderId);
     }
 
     //appeal, so voters can vote
     //triggled by seller or buyer
-    function appeal(uint256 appId, uint256 orderId) public {
+    function appeal(uint256 orderId) public {
 
-        require(_msgSender()==orderBook[appId][orderId].seller || _msgSender()==orderBook[appId][orderId].buyer,'Only seller or buyer can appeal');
+        require(_msgSender()==orderBook[orderId].seller || 
+                _msgSender()==orderBook[orderId].buyer,
+                            'Only seller or buyer can appeal');
 
-        require(orderBook[appId][orderId].status==uint8(4),'Order status must be equal to refund refused by seller');
+        require(orderBook[orderId].status==uint8(4),'Order status must be equal to refund refused by seller');
 
-        //update order status to appeal dispute
-        orderBook[appId][orderId].status=uint8(5);
+        //update order status to appeal dispute, ready for mods to vote
+        orderBook[orderId].status=uint8(5);
 
-        emit Appeal(appId, orderId);
+        emit Appeal(orderBook[orderId].appId, orderId);
 
     }
 
@@ -417,14 +425,34 @@ contract Escrow is IEscrow, Ownable {
 
     // if seller agreed refund, then refund immediately
     // else the msg.sender must deposit 1000 DService coin into it to vote agree
-    function agreeRefund(uint256 appId, uint256 orderId) public {
+    function agreeRefund(uint256 orderId) public {
 
         //if seller agreed refund, than refund immediately
-        if(_msgSender()==orderBook[appId][orderId].seller) {
-            require(orderBook[appId][orderId].status==uint8(2) || orderBook[appId][orderId].status==uint8(4),'order status must be equal to 2 or 4');
-            sellerAgree(appId, orderId);
+        if(_msgSender()==orderBook[orderId].seller) {
+            require(orderBook[orderId].status==uint8(2) || 
+                    orderBook[orderId].status==uint8(4),
+                    'order status must be at refund asked or refund refused');
+            sellerAgree(orderId);
         } else {
-            require(orderBook[appId][orderId].status==uint8(5),'only can vote on appealing');
+            require(orderBook[orderId].status==uint8(5),'mod can only vote on appealing status');
+            
+            // if modA's owner equal to modB's owner and they are msg sender
+            if(moderatorContract.getOwner(orderBook[orderId].modAId)==moderatorContract.getOwner(orderBook[orderId].modBId)){
+                refundNow(orderId, true);
+            }
+            // if voter is app owner , and modA/modB not agree.
+            else if(orderBook[orderId].appOwner == _msgSender() && 
+                    (orderBook[orderId].modAVote==uint8(1)&&orderBook[orderId].modBVote==uint8(2)
+                    || orderBook[orderId].modAVote==uint8(2)&&orderBook[orderId].modBVote==uint8(1))){
+                        refundNow(orderId, true);
+            }
+            // if voter is modA, and modA not vote yet
+            else if(
+                moderatorContract.getOwner(orderBook[orderId].modAId)==_msg.sender() &&
+                orderBook[orderId].modBVote==uint8(0)
+            ) {
+                // if modB vote disagree
+            }
             // check if order now meet the condition of finishing the order
             if(orderBook[appId][orderId].agree.length.add(1) >= orderBook[appId][orderId].minVoteDiff.add(orderBook[appId][orderId].disagree.length)
                 &&
