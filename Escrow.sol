@@ -37,18 +37,17 @@ contract Escrow is IEscrow, Ownable {
     // appId => string
     mapping(uint256 =>  string)     public  appName;
 
-    // app max order id
-    // appId => max int
-    mapping(uint256 =>  uint256)    public  appMaxOrder;
+    // total app num
+    uint256 private  maxAppNum;
+
+    // total order num
+    uint256 public maxOrderId;
 
     // app mod commission (For each mod and app owner if possible)
     mapping(uint256 =>  uint8)      public  appModCommission;
 
     // app owner commission
     mapping(uint256 => uint8)       public appOwnerCommission;
-
-    // platform commission
-    uint8                           public  platformCommission = 1;
 
     //after how many seconds, if seller does not refuse refund, buyer can cashout the refund.
     mapping(uint256 => mapping(uint256 => uint256)) public refuseExpired;
@@ -72,7 +71,7 @@ contract Escrow is IEscrow, Ownable {
         uint8   appOwnerCommission; //commission fee for app owner
         uint256 refundTime;     //before when buyer can ask refund
         uint256 cashOutTime;    //when can be cashed out
-        uint8   modComission;   //The commision fee in percentage to each mod, including app owner if it resolve the order
+        uint8   modCommission;   //The commision fee in percentage to each mod, including app owner if it resolves the order
     }
 
     // orderId => Order
@@ -80,9 +79,6 @@ contract Escrow is IEscrow, Ownable {
 
     // user balance (userAddress => mapping(coinAddress => balance))
     mapping(address =>  mapping(address => uint256))    public userBalance;
-
-    // total app num
-    uint256 private  maxAppNum;
 
     //Withdraw event
     event Withdraw(
@@ -103,7 +99,9 @@ contract Escrow is IEscrow, Ownable {
         address  buyer,
         address  seller,
         uint256  appId,
-        uint256  entityId
+        uint256  entityId,
+        uint256  modAId,
+        uint256  modBId
     );
 
     //Confirm Done event
@@ -189,7 +187,7 @@ contract Escrow is IEscrow, Ownable {
     //Create new APP
     function newApp(address _appOwner, string memory _appName, string memory websiteURI) public onlyOwner returns(uint256) {
 
-        uint256 appId                     =  totalSupply().add(1);
+        uint256 appId                     =  maxAppNum.add(1);
         appOwner[appId]                   =  _appOwner;
         appURI[appId]                     =   websiteURI;
         appName[appId]                    =   _appName;
@@ -197,29 +195,33 @@ contract Escrow is IEscrow, Ownable {
         intervalDispute[appId]            =   uint256(1000000);
         intervalCashOut[appId]            =   uint256(1000000);
         intervalRefuse[appId]             =   uint256(86400);
-        appVotePrice[appId]               =   uint256(1500000000);
-        appMinVotes[appId]                =   uint256(5);
-        appMinVoteDiff[appId]             =   uint256(2);
-        appOwnerCommission[appId]         =   uint8(5);
-        platformCommission[appId]         =   uint8(2);
+        modCommission[appId]              =   uint8(1);
+        appOwnerCommission[appId]         =   uint8(1);
         maxAppNum                         =   appId;
         emit NewApp(appId);
 
         return appId;
     }
 
-    //Set app min votes
-    function setAppMinVotes(uint256 appId, uint256 _minVotes) public onlyOwner {
-        require(_minVotes > 3, 'min votes must greater than 3');
-        require(_minVotes < 15,'min votes must less than 15');
-        appMinVotes[appId]  =   _minVotes;
+    //Set mod commission
+    //Only app owner
+    function setModCommission(uint256 appId, uint8 _commission) public returns(bool) {
+        // Only app owner
+        require(_msgSender() == appOwner[appId], "Only app owner can set mod commission");
+        require(_commission > 0, 'Commission must be greater than 0');
+        require(_commission < 15,'Commission must be less than 15');
+        modCommission[appId]  =   _commission;
+        return true;
     }
 
     //Set app min votes difference
-    function setAppMinVotesDiff(uint256 appId, uint256 _minVotesDiff) public onlyOwner {
-        require(_minVotesDiff > 1, 'min votes difference must greater than 1');
-        require(_minVotesDiff < appMinVotes[appId],'min votes difference must less than min votes');
-        appMinVoteDiff[appId]   =   _minVotesDiff;
+    function setAppOwnerCommission(uint256 appId, uint256 _commission) public returns(bool) {
+        // Only app owner
+        require(_msgSender() == appOwner[appId], "Only app owner can set mod commission");
+        require(_commission > 0, 'Commission must be greater than 0');
+        require(_commission < 15,'Commission must be less than 15');
+        appOwnerCommission[appId]  =   _commission;
+        return true;
     }
 
     //Set dispute interval timestamp
@@ -244,13 +246,22 @@ contract Escrow is IEscrow, Ownable {
     }
 
     //Create Order
-    function createOrder(uint256 appId, uint256 amount, address coinAddress, address seller, uint256 appOrderId, uint256 entityId) public payable returns(uint256) {
-        require(entityId > 0 && appId > 0 && appId <= totalSupply() && appOrderId > 0 && amount > 0);
+    function createOrder(
+        uint256 appId, 
+        uint256 amount, 
+        address coinAddress, 
+        address seller, 
+        uint256 appOrderId, 
+        uint256 entityId, 
+        uint256 modAId, 
+        uint256 modBId
+        ) public payable returns(uint256) {
+        require(entityId > 0 && appId > 0 && appId <= maxAppNum && appOrderId > 0 && amount > 0);
         //check if app order id already is already on the blockchain. PS : It is wrong to do that, as appId with appOrderId maybe duplicated, and it is acceptable.
         // if(chainOrderIdOfAppOrderId[appId][appOrderId] > 0 ) {
         //     revert("Dservice : The order is already paid");
         // }
-        //BNB or ETH
+        //Native Currency
         if(coinAddress  ==  address(0)) {
             require(msg.value   ==  amount, 'Wrong amount or wrong value sent');
             //send BNB/ETH to this contract
@@ -260,10 +271,11 @@ contract Escrow is IEscrow, Ownable {
             //send ERC20 to this contract
             buyCoinContract.transferFrom(msg.sender, address(this), amount);
         }
-        uint256 orderId =   appMaxOrder[appId].add(1);
+        uint256 orderId =   maxOrderId.add(1);
         // store order information
         Order memory _order;
         _order.id           =   orderId;
+        _order.appId        =   appId;
         _order.coinAddress  =   coinAddress;
         _order.amount       =   amount;
         _order.appOrderId   =   appOrderId;
@@ -274,25 +286,37 @@ contract Escrow is IEscrow, Ownable {
         _order.cashOutTime  =   block.timestamp.add(intervalCashOut[appId]);
         _order.refund       =   uint256(0);
         _order.status       =   uint8(1);
-        _order.votePrice    =   appVotePrice[appId];
-        _order.minVotes     =   appMinVotes[appId];
-        _order.minVoteDiff  =   appMinVoteDiff[appId];
+        _order.modAId       =   modAId;
+        _order.modBId       =   modBId;
+        _order.appOwner     =   appOwner[appId];
+        _order.modCommission =   modCommission[appId];
+        _order.appOwnerCommission  =   appOwnerCommission[appId];
 
-        orderBook[appId][orderId]    =   _order;
+        orderBook[orderId]    =   _order;
         //update max order information
-        appMaxOrder[appId]  =   orderId;
+        maxOrderId  =   orderId;
         // record the app order id on blockchain. PS : No need any more.
         // chainOrderIdOfAppOrderId[appId][appOrderId] = orderId;
 
         // emit event
-        emit CreateOrder(orderId, appOrderId, coinAddress,amount,_msgSender(),seller,appId, entityId);
+        emit CreateOrder(
+        orderId, 
+        appOrderId, 
+        coinAddress,
+        amount,
+        _msgSender(),
+        seller,
+        appId, 
+        entityId,
+        modAId,
+        modBId);
 
         return orderId;
     }
 
     //confirm order received, and money will be cash out to seller
     //triggled by buyer
-    function confirmDone(uint256 appId, uint256 orderId) public {
+    function confirmDone(uint256 orderId) public {
 
         require(_msgSender()==orderBook[appId][orderId].buyer,'Only buyer can confirm done');
 
@@ -302,27 +326,27 @@ contract Escrow is IEscrow, Ownable {
                 'Order status must be equal to just paid or refund asked or dispute refused');
 
         // cash out money to seller
-        userBalance[orderBook[appId][orderId].seller][orderBook[appId][orderId].coinAddress]    =   userBalance[orderBook[appId][orderId].seller][orderBook[appId][orderId].coinAddress].add(orderBook[appId][orderId].amount);
+        userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress]    =   userBalance[orderBook[orderId].seller][orderBook[orderId].coinAddress].add(orderBook[orderId].amount);
             emit UserBalanceChanged(
-                orderBook[appId][orderId].seller,
+                orderBook[orderId].seller,
                 true,
-                orderBook[appId][orderId].amount,
-                orderBook[appId][orderId].coinAddress,
+                orderBook[orderId].amount,
+                orderBook[orderId].coinAddress,
                 appId,
                 orderId
             );
 
         // set order status to completing
-        orderBook[appId][orderId].status==uint8(3);
+        orderBook[orderId].status==uint8(3);
 
         //emit event
-        emit ConfirmDone(appId, orderId);
+        emit ConfirmDone(orderId);
 
     }
 
     //ask refund
     //triggled by buyer
-    function askRefund(uint256 appId, uint256 orderId, uint256 refund) public {
+    function askRefund(uint256 orderId, uint256 refund) public {
 
         require(_msgSender()==orderBook[appId][orderId].buyer,'Only buyer can make dispute');
 
