@@ -4,81 +4,85 @@ import "./common/IERC20.sol";
 import "./common/Ownable.sol";
 import "./common/SafeMath.sol";
 import "./IEscrow.sol";
+import "./IModerator.sol";
 
 contract Escrow is IEscrow, Ownable {
     using SafeMath for uint256;
-    //vote coin contract
-    address public voteCoinAddress =   0xebBA921554901aBc495Bf4C9f5E8F1C1c98078d9;
+    //moderator contract
+    address public moderatorAddress;
 
-    IERC20 voteCoinContract = IERC20(voteCoinAddress);
+    IERC20 moderatorContract = IERC20(moderatorAddress);
 
     // app owner
-    mapping(uint256 => address) private _ownerOf;
-
-    //app vote price
-    mapping(uint256 =>  uint256) public appVotePrice;
-
-    //app min vote quantity
-    mapping(uint256 =>  uint256) public appMinVotes;
-
-    //app min votes difference
-    mapping(uint256 => uint256) public appMinVoteDiff;
+    // appId => address
+    mapping(uint256 => address) public appOwner;
 
     //how many seconds after order paid, can buyer make dispute
-    mapping(uint256 =>  uint256)    public  intervalDispute;
+    // appId => interval
+    mapping(uint256 =>  uint256)    public  appIntervalDispute;
 
     //how many seconds after order paid, can seller cash out order
-    mapping(uint256 =>  uint256)    public  intervalCashOut;
+    // appId => interval
+    mapping(uint256 =>  uint256)    public  appIntervalCashOut;
 
     //how many seconds after dispute made, if seller does not response, buyer can cashout the refund
-    mapping(uint256 =>  uint256)    public  intervalRefuse;
+    // appId => interval
+    mapping(uint256 =>  uint256)    public  appIntervalRefuse;
 
     // app uri
+    // appId => string
     mapping(uint256 =>  string)     public  appURI;
 
     // app name
+    // appId => string
     mapping(uint256 =>  string)     public  appName;
 
     // app max order id
+    // appId => max int
     mapping(uint256 =>  uint256)    public  appMaxOrder;
 
-    // app owner commission ratio
-    mapping(uint256 =>  uint8)      public  appOwnerCommission;
+    // app mod commission (For each mod and app owner if possible)
+    mapping(uint256 =>  uint8)      public  appModCommission;
 
-    // platform commission ratio
-    mapping(uint256 =>  uint8)      public  platformCommission;
+    // app owner commission
+    mapping(uint256 => uint8)       public appOwnerCommission;
 
-    //after such time, if seller does not refuse refund, buyer can cashout the refund.
+    // platform commission
+    uint8                           public  platformCommission = 1;
+
+    //after how many seconds, if seller does not refuse refund, buyer can cashout the refund.
     mapping(uint256 => mapping(uint256 => uint256)) public refuseExpired;
 
     //Struct Order
     struct Order {
         uint256 id;             //order id
+        uint256 appId;          //app   id
         uint256 amount;         //order amount
         address coinAddress;    //coin contract address
         address buyer;          //buyer address
         address seller;         //seller address
         uint256 appOrderId;     //centralized app order id
         uint256 timestamp;      //timestamp
-        uint256 refundTime;     //before when can ask refund
-        uint256 cashOutTime;    //when can be cash out
         uint8   status;         //order status, 1 paid, 2 buyer ask refund, 3 completed, 4 seller refuse dispute, 5 buyer or seller appeal, so voters can vote
         uint256 refund;         //disputeId
-        uint256 votePrice;      //the price to vote refund
-        uint256 minVotes;       //min votes to finish the order
-        uint256 minVoteDiff;    //min different votes to finish the order
-        address[] agree;        //referees who agrees the refund
-        address[] disagree;     //referees who disagree the refund
+        uint256 modAId;         //the mod that chosen by seller
+        uint256 modBId;         //the mod that chosen by buyer
+        // The following info comes from app settings
+        address appOwner;       //app owner
+        uint8   appOwnerCommission; //commission fee for app owner
+        uint256 refundTime;     //before when buyer can ask refund
+        uint256 cashOutTime;    //when can be cashed out
+        uint8   modComission;   //The commision fee in percentage to each mod, including app owner if it resolve the order
     }
 
-    // appId => Order[]
-    mapping(uint256 =>  mapping(uint256 =>  Order))    public orderBook;
+    // orderId => Order
+    mapping(uint256 =>  Order)    public orderBook;
 
     // user balance (userAddress => mapping(coinAddress => balance))
     mapping(address =>  mapping(address => uint256))    public userBalance;
 
     // total app num
-    uint256 private  _totalSupply;
+    uint256 private  maxAppNum;
 
     //Withdraw event
     event Withdraw(
@@ -173,20 +177,20 @@ contract Escrow is IEscrow, Ownable {
     // make the contract payable
     function () payable external {}
 
-    // get total supply apps
-    function totalSupply() public view returns(uint256) {
-        return _totalSupply;
+    // get total apps quantity
+    function getTotalAppsQuantity() public view returns(uint256) {
+        return maxAppNum;
     }
 
-    // get owner of appId
-    function ownerOf(uint256 appId) public view returns(address) {
-        return _ownerOf[appId];
+    // get app owner
+    function getAppOwner(uint256 appId) public view returns(address) {
+        return appOwner[appId];
     }
     //Create new APP
-    function newApp(address appOwner, string memory _appName, string memory websiteURI) public onlyOwner returns(uint256) {
+    function newApp(address _appOwner, string memory _appName, string memory websiteURI) public onlyOwner returns(uint256) {
 
         uint256 appId                     =  totalSupply().add(1);
-        _ownerOf[appId]                   =  appOwner;
+        appOwner[appId]                   =  _appOwner;
         appURI[appId]                     =   websiteURI;
         appName[appId]                    =   _appName;
         appMaxOrder[appId]                =   uint256(0);
@@ -198,22 +202,10 @@ contract Escrow is IEscrow, Ownable {
         appMinVoteDiff[appId]             =   uint256(2);
         appOwnerCommission[appId]         =   uint8(5);
         platformCommission[appId]         =   uint8(2);
-        _totalSupply                      =   appId;
+        maxAppNum                         =   appId;
         emit NewApp(appId);
 
         return appId;
-    }
-    //Set platformCommission ratio
-    function setPlatformCommission(uint256 appId, uint8 _ratio) public onlyOwner {
-        require(_ratio <= 20, 'platform commission can not be over than 20%');
-        platformCommission[appId]   =   _ratio;
-    }
-
-    //Set app vote price
-    function setAppVotePrice(uint256 appId, uint256 _price) public onlyOwner {
-        require(_price < 100000000000, 'price should be smaller than 100000');
-        require(_price > 1000000000, 'price should be larger than 1000');
-        appVotePrice[appId]    =   _price;
     }
 
     //Set app min votes
@@ -249,27 +241,6 @@ contract Escrow is IEscrow, Ownable {
         require(_timestamp > 20, 'interval time too small!');
         require(_timestamp < 10000000, 'interval time too big!');
         intervalCashOut[appId]    =   _timestamp;
-    }
-
-    //Set APP Owner commission ratio
-    function setAppOwnerCommission(uint256 appId,   uint8 _ratio) public {
-        require(_msgSender() == ownerOf(appId), "only app owner can set its owner commission");
-        require(_ratio <= 50, "app owner commission can not bigger than 50%");
-        appOwnerCommission[appId]   =   _ratio;
-    }
-
-    //Set APP URI
-    function setAppURI(uint256 appId,   string memory websiteURI)   public  {
-        require(_msgSender() == ownerOf(appId), "only app owner can set its uri");
-
-        appURI[appId]   =   websiteURI;
-    }
-
-    //Set APP NAME
-    function setAppName(uint256 appId,   string memory name)   public  {
-        require(_msgSender() == ownerOf(appId), "only app owner can set its uri");
-
-        appName[appId]   =   name;
     }
 
     //Create Order
