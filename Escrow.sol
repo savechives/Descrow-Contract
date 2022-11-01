@@ -686,6 +686,18 @@ contract Escrow is IEscrow, Ownable {
         orderBook[orderId].status = uint8(3);
         // final commission is the app owner commission
         uint8 finalCommission = orderBook[orderId].appOwnerCommission;
+        // add app ownner commission fee
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress] =
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress].add(
+            orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100));
+        emit UserBalanceChanged(
+                orderBook[orderId].appOwner,
+                true,
+                orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
+                orderId
+            );
         // as the refund is approved, refund to buyer
         userBalance[orderBook[orderId].buyer][
             orderBook[orderId].coinAddress
@@ -786,21 +798,26 @@ contract Escrow is IEscrow, Ownable {
         // caculate the commission fee
         uint256 finalCommission = orderBook[orderId].appOwnerCommission +
             (modNum * orderBook[orderId].modCommission);
-
+        // add app ownner commission fee
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress] =
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress].add(
+            orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100));
+        emit UserBalanceChanged(
+                orderBook[orderId].appOwner,
+                true,
+                orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
+                orderId
+            );
         //if result is to refund, then refund to buyer, the left will be sent to seller
         //else all paid to the seller
 
         if (result == true) {
             // as the refund is approved, refund to buyer
-            userBalance[orderBook[orderId].buyer][
-                orderBook[orderId].coinAddress
-            ] = userBalance[orderBook[orderId].buyer][
-                orderBook[orderId].coinAddress
-            ].add(
-                    orderBook[orderId].refund.mul(100 - finalCommission).div(
-                        100
-                    )
-                );
+            userBalance[orderBook[orderId].buyer][orderBook[orderId].coinAddress] = 
+            userBalance[orderBook[orderId].buyer][orderBook[orderId].coinAddress].add(
+                    orderBook[orderId].refund.mul(100 - finalCommission).div(100));
             emit UserBalanceChanged(
                 orderBook[orderId].buyer,
                 true,
@@ -835,7 +852,6 @@ contract Escrow is IEscrow, Ownable {
             }
             emit RefundNow(orderBook[orderId].appId, orderId, uint8(1));
         } else {
-            // winner is the disagree
             // send all the amount to the seller
             userBalance[orderBook[orderId].seller][
                 orderBook[orderId].coinAddress
@@ -862,13 +878,16 @@ contract Escrow is IEscrow, Ownable {
     // adding mod commission as well as increasing mod score
     function rewardMod(uint256 orderId, address mod) private {
         moderatorContract.increaseScore(mod, uint256(1));
-        userBalance[mod][orderBook[orderId].coinAddress] = userBalance[mod][
-            orderBook[orderId].coinAddress
-        ].add(
-                orderBook[orderId]
-                    .amount
-                    .mul(orderBook[orderId].modCommission)
-                    .div(100)
+        userBalance[mod][orderBook[orderId].coinAddress] = 
+        userBalance[mod][orderBook[orderId].coinAddress].add(
+            orderBook[orderId].amount.mul(orderBook[orderId].modCommission).div(100));
+        emit UserBalanceChanged(
+                mod,
+                true,
+                orderBook[orderId].amount.mul(orderBook[orderId].modCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
+                orderId
             );
     }
 
@@ -876,6 +895,20 @@ contract Escrow is IEscrow, Ownable {
     //or
     //buyer want to cash out money after seller either not to refuse dispute or agree dispute
     function cashOut(uint256 orderId) public {
+        // final commission is the app owner commission
+        uint8 finalCommission = orderBook[orderId].appOwnerCommission;
+        // add app ownner commission fee
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress] =
+        userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress].add(
+            orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100));
+        emit UserBalanceChanged(
+                orderBook[orderId].appOwner,
+                true,
+                orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
+                orderId
+            );
         //seller cashout
         if (_msgSender() == orderBook[orderId].seller) {
             require(
@@ -887,78 +920,80 @@ contract Escrow is IEscrow, Ownable {
                 block.timestamp > orderBook[orderId].cashOutTime,
                 "currently seller can not cash out, need to wait"
             );
-
-            userBalance[orderBook[appId][orderId].seller][
-                orderBook[appId][orderId].coinAddress
-            ] = userBalance[orderBook[appId][orderId].seller][
-                orderBook[appId][orderId].coinAddress
-            ].add(orderBook[appId][orderId].amount);
+            // send all the amount to the seller
+            userBalance[orderBook[orderId].seller][
+                orderBook[orderId].coinAddress
+            ] = userBalance[orderBook[orderId].seller][
+                orderBook[orderId].coinAddress
+            ].add(
+                    orderBook[orderId].amount.mul(100 - finalCommission).div(
+                        100
+                    )
+                );
             emit UserBalanceChanged(
-                orderBook[appId][orderId].seller,
+                orderBook[orderId].seller,
                 true,
-                orderBook[appId][orderId].amount,
-                orderBook[appId][orderId].coinAddress,
-                appId,
+                orderBook[orderId].amount.mul(100 - finalCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
                 orderId
             );
-        } else if (_msgSender() == orderBook[appId][orderId].buyer) {
+            
+        } else if (_msgSender() == orderBook[orderId].buyer) {
             // buyer cashout
 
             require(
-                orderBook[appId][orderId].status == uint8(2),
+                orderBook[orderId].status == uint8(2),
                 "order status must be equal to 2 "
             );
 
             require(
-                block.timestamp > refuseExpired[appId][orderId],
+                block.timestamp > refuseExpired[orderId],
                 "currently buyer can not cash out, need to wait"
             );
-
-            //give refund to buyer balance
-            userBalance[orderBook[appId][orderId].buyer][
-                orderBook[appId][orderId].coinAddress
-            ] = userBalance[orderBook[appId][orderId].buyer][
-                orderBook[appId][orderId].coinAddress
-            ].add(orderBook[appId][orderId].refund);
+            // refund to buyer
+            userBalance[orderBook[orderId].buyer][orderBook[orderId].coinAddress] = 
+            userBalance[orderBook[orderId].buyer][orderBook[orderId].coinAddress].add(
+                    orderBook[orderId].refund.mul(100 - finalCommission).div(100));
             emit UserBalanceChanged(
-                orderBook[appId][orderId].buyer,
+                orderBook[orderId].buyer,
                 true,
-                orderBook[appId][orderId].refund,
-                orderBook[appId][orderId].coinAddress,
-                appId,
+                orderBook[orderId].refund.mul(100 - finalCommission).div(100),
+                orderBook[orderId].coinAddress,
+                orderBook[orderId].appId,
                 orderId
             );
             // if there is amount left, then send left amount to seller
-            if (
-                orderBook[appId][orderId].amount >
-                orderBook[appId][orderId].refund
-            ) {
-                userBalance[orderBook[appId][orderId].seller][
-                    orderBook[appId][orderId].coinAddress
-                ] = userBalance[orderBook[appId][orderId].seller][
-                    orderBook[appId][orderId].coinAddress
+            if (orderBook[orderId].amount > orderBook[orderId].refund) {
+                userBalance[orderBook[orderId].seller][
+                    orderBook[orderId].coinAddress
+                ] = userBalance[orderBook[orderId].seller][
+                    orderBook[orderId].coinAddress
                 ].add(
-                        orderBook[appId][orderId].amount.sub(
-                            orderBook[appId][orderId].refund
-                        )
+                        (
+                            orderBook[orderId].amount.sub(
+                                orderBook[orderId].refund
+                            )
+                        ).mul(100 - finalCommission).div(100)
                     );
                 emit UserBalanceChanged(
-                    orderBook[appId][orderId].seller,
+                    orderBook[orderId].seller,
                     true,
-                    orderBook[appId][orderId].amount.sub(
-                        orderBook[appId][orderId].refund
-                    ),
-                    orderBook[appId][orderId].coinAddress,
-                    appId,
+                    (orderBook[orderId].amount.sub(orderBook[orderId].refund))
+                        .mul(100 - finalCommission)
+                        .div(100),
+                    orderBook[orderId].coinAddress,
+                    orderBook[orderId].appId,
                     orderId
                 );
             }
+            
         } else {
             revert("only seller or buyer can cash out");
         }
 
-        orderBook[appId][orderId].status = 3;
-        emit CashOut(_msgSender(), appId, orderId);
+        orderBook[orderId].status = 3;
+        emit CashOut(_msgSender(), orderBook[orderId].appId, orderId);
     }
 
     //withdraw from user balance
