@@ -5,6 +5,9 @@ interface IModerator {
     // get mod's owner
     function getModOwner(uint256 modId) external returns(address);
 
+    // get mod's total supply
+    function getMaxModId() external returns(uint256);
+
     // increase mod's score
     function increaseScore(uint256 modId, uint256 inScore) external returns(bool);
 

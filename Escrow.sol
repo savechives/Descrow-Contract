@@ -21,11 +21,11 @@ contract Escrow is IEscrow, Ownable {
     // appId => interval
     mapping(uint256 => uint256) public appIntervalDispute;
 
-    //how many seconds after order paid, can seller cash out order
+    //how many seconds after order paid, can seller claim order
     // appId => interval
-    mapping(uint256 => uint256) public appIntervalCashOut;
+    mapping(uint256 => uint256) public appIntervalClaim;
 
-    //how many seconds after dispute made, if seller does not response, buyer can cashout the refund
+    //how many seconds after dispute made, if seller does not response, buyer can claim the refund
     // appId => interval
     mapping(uint256 => uint256) public appIntervalRefuse;
 
@@ -49,7 +49,7 @@ contract Escrow is IEscrow, Ownable {
     // app owner commission
     mapping(uint256 => uint8) public appOwnerCommission;
 
-    //after how many seconds, if seller does not refuse refund, buyer can cashout the refund.
+    //after how many seconds, if seller does not refuse refund, buyer can claim the refund.
     mapping(uint256 => mapping(uint256 => uint256)) public refuseExpired;
 
     //Struct Order
@@ -62,7 +62,7 @@ contract Escrow is IEscrow, Ownable {
         address seller; //seller address
         uint256 appOrderId; //centralized app order id
         uint256 timestamp; //timestamp
-        uint8 status; //order status, 1 paid, 2 buyer ask refund, 3 completed, 4 seller refuse dispute, 5 buyer or seller appeal, so voters can vote
+        uint8 status; //order status, 1 paid, 2 buyer ask refund, 3 completed, 4 seller refuse dispute, 5 buyer or seller escalate, so voters can vote
         uint256 refund; //disputeId
         uint256 modAId; //the mod that chosen by seller
         uint8 modAVote; // 0 not vote, 1 agree refund, 2 disagree refund.
@@ -72,7 +72,7 @@ contract Escrow is IEscrow, Ownable {
         address appOwner; //app owner
         uint8 appOwnerCommission; //commission fee for app owner
         uint256 refundTime; //before when buyer can ask refund
-        uint256 cashOutTime; //when can be cashed out
+        uint256 claimTime; //when can be cashed out
         uint8 modCommission; //The commision fee in percentage to each mod, including app owner if it resolves the order
     }
 
@@ -93,7 +93,7 @@ contract Escrow is IEscrow, Ownable {
     event NewApp(uint256 indexed appId); //appId
 
     //Create order event
-    event CreateOrder(
+    event PayOrder(
         uint256 indexed orderId,
         uint256 indexed appOrderId,
         address indexed coinAddress,
@@ -122,8 +122,8 @@ contract Escrow is IEscrow, Ownable {
     //Refuse refund event
     event RefuseRefund(uint256 indexed appId, uint256 indexed orderId);
 
-    //Appeal dispute event
-    event Appeal(uint256 indexed appId, uint256 indexed orderId);
+    //Escalate dispute event
+    event Escalate(uint256 indexed appId, uint256 indexed orderId);
 
     //Vote to Agree or Disagree refund
     event Vote(
@@ -131,18 +131,18 @@ contract Escrow is IEscrow, Ownable {
         bool indexed isAgree,
         uint256 indexed orderId,
         uint256 appId,
-        uint256 price
+        uint8 voterType // 0 both modA&modB, 1 modA, 2 modB, 3 app Owner 
     );
 
     //Refund now event
-    event RefundNow(
+    event ResolvedNow(
         uint256 indexed appId,
         uint256 indexed orderId,
         uint8 indexed refundType //0 disagree win, 1 agree win, 2 seller refund
     );
 
     //Cash out event
-    event CashOut(
+    event Claim(
         address indexed user,
         uint256 indexed appId,
         uint256 indexed orderId
@@ -185,7 +185,7 @@ contract Escrow is IEscrow, Ownable {
         appName[appId] = _appName;
         appMaxOrder[appId] = uint256(0);
         intervalDispute[appId] = uint256(1000000);
-        intervalCashOut[appId] = uint256(1000000);
+        intervalClaim[appId] = uint256(1000000);
         intervalRefuse[appId] = uint256(86400);
         modCommission[appId] = uint8(1);
         appOwnerCommission[appId] = uint8(1);
@@ -193,6 +193,22 @@ contract Escrow is IEscrow, Ownable {
         emit NewApp(appId);
 
         return appId;
+    }
+
+    //Transfer app owner to a new address
+    function setAppOwner(uint256 appId, address _newOwner)
+        public
+        returns (bool)
+    {
+        // Only app owner
+        require(
+            _msgSender() == appOwner[appId],
+            "Escrow: only app owner can set app owner"
+        );
+        require(_newOwner != address(0), "Escrow: new owner is the zero address");
+        appOwner[appId] = _newOwner;
+
+        return true;
     }
 
     //Set mod commission
@@ -204,15 +220,14 @@ contract Escrow is IEscrow, Ownable {
         // Only app owner
         require(
             _msgSender() == appOwner[appId],
-            "Only app owner can set mod commission"
+            "Escrow: only app owner can set mod commission"
         );
-        require(_commission > 0, "Commission must be greater than 0");
-        require(_commission < 15, "Commission must be less than 15");
+        require(_commission < 15, "Escrow: commission must be less than 15");
         modCommission[appId] = _commission;
         return true;
     }
 
-    //Set app min votes difference
+    //Set app owner commission
     function setAppOwnerCommission(uint256 appId, uint256 _commission)
         public
         returns (bool)
@@ -220,46 +235,63 @@ contract Escrow is IEscrow, Ownable {
         // Only app owner
         require(
             _msgSender() == appOwner[appId],
-            "Only app owner can set mod commission"
+            "Escrow: only app owner can set app owner commission"
         );
-        require(_commission > 0, "Commission must be greater than 0");
-        require(_commission < 15, "Commission must be less than 15");
+        require(_commission < 45, "Escrow: commission must be less than 45");
         appOwnerCommission[appId] = _commission;
         return true;
     }
 
-    //Set dispute interval timestamp
-    function setIntervalDispute(uint256 appId, uint256 _timestamp)
+    //Set dispute interval
+    function setIntervalDispute(uint256 appId, uint256 _seconds)
         public
-        onlyOwner
+        returns (bool)
     {
-        require(_timestamp > 10, "interval time too small!");
-        require(_timestamp < 10000000, "interval time too big!");
-        intervalDispute[appId] = _timestamp;
+        // Only app owner
+        require(
+            _msgSender() == appOwner[appId],
+            "Escrow: only app owner can set dispute interval"
+        );
+        require(_seconds > 10, "Escrow: interval time too small!");
+        require(_seconds < 10000000, "Escrow: interval time too big!");
+        intervalDispute[appId] = _seconds;
+        return true;
     }
 
-    //Set refuse interval timestamp
-    function setIntervalRefuse(uint256 appId, uint256 _timestamp)
+    //Set refuse interval
+    function setIntervalRefuse(uint256 appId, uint256 _seconds)
         public
-        onlyOwner
+        returns (bool)
     {
-        require(_timestamp > 10, "interval time too small!");
-        require(_timestamp < 10000000, "interval time too big!");
-        intervalRefuse[appId] = _timestamp;
+        // Only app owner
+        require(
+            _msgSender() == appOwner[appId],
+            "Escrow: only app owner can set refuse interval"
+        );
+        require(_seconds > 10, "Escrow: interval time too small!");
+        require(_seconds < 10000000, "Escrow: interval time too big!");
+        intervalRefuse[appId] = _seconds;
+        return true;
     }
 
-    //Set cash out interval timestamp
-    function setIntervalCashOut(uint256 appId, uint256 _timestamp)
+    //Set claim interval
+    function setIntervalClaim(uint256 appId, uint256 _seconds)
         public
-        onlyOwner
+        return (bool)
     {
-        require(_timestamp > 20, "interval time too small!");
-        require(_timestamp < 10000000, "interval time too big!");
-        intervalCashOut[appId] = _timestamp;
+        // Only app owner
+        require(
+            _msgSender() == appOwner[appId],
+            "Escrow: only app owner can set claim interval"
+        );
+        require(_seconds > 20, "Escrow: interval time too small!");
+        require(_seconds < 10000000, "Escrow: interval time too big!");
+        intervalClaim[appId] = _seconds;
+        return true;
     }
 
-    //Create Order
-    function createOrder(
+    //Pay Order
+    function payOrder(
         uint256 appId,
         uint256 amount,
         address coinAddress,
@@ -274,16 +306,16 @@ contract Escrow is IEscrow, Ownable {
                 appId > 0 &&
                 appId <= maxAppNum &&
                 appOrderId > 0 &&
-                amount > 0
+                amount > 0,
+                "Escrow: all the ids should be bigger than 0"
         );
-        //check if app order id already is already on the blockchain. PS : It is wrong to do that, as appId with appOrderId maybe duplicated, and it is acceptable.
-        // if(chainOrderIdOfAppOrderId[appId][appOrderId] > 0 ) {
-        //     revert("Dservice : The order is already paid");
-        // }
+        //Mod Id should be validated
+        uint256 maxModId = moderatorContract.getMaxModId();
+        require(modAId <= maxModId && modBId <= maxModId, "Escrow: mod id is too big");
         //Native Currency
         if (coinAddress == address(0)) {
-            require(msg.value == amount, "Wrong amount or wrong value sent");
-            //send BNB/ETH to this contract
+            require(msg.value == amount, "Escrow: Wrong amount or wrong value sent");
+            //send native currency to this contract
             address(this).transfer(amount);
         } else {
             IERC20 buyCoinContract = IERC20(coinAddress);
@@ -302,7 +334,7 @@ contract Escrow is IEscrow, Ownable {
         _order.seller = seller;
         _order.timestamp = block.timestamp;
         _order.refundTime = block.timestamp.add(intervalDispute[appId]);
-        _order.cashOutTime = block.timestamp.add(intervalCashOut[appId]);
+        _order.claimTime = block.timestamp.add(intervalClaim[appId]);
         _order.refund = uint256(0);
         _order.status = uint8(1);
         _order.modAId = modAId;
@@ -320,7 +352,7 @@ contract Escrow is IEscrow, Ownable {
         // chainOrderIdOfAppOrderId[appId][appOrderId] = orderId;
 
         // emit event
-        emit CreateOrder(
+        emit PayOrder(
             orderId,
             appOrderId,
             coinAddress,
@@ -336,22 +368,22 @@ contract Escrow is IEscrow, Ownable {
         return orderId;
     }
 
-    //confirm order received, and money will be cash out to seller's balance
+    //confirm order received, and money will be sent to seller's balance
     //triggled by buyer
     function confirmDone(uint256 orderId) public {
         require(
-            _msgSender() == orderBook[appId][orderId].buyer,
-            "Only buyer can confirm done"
+            _msgSender() == orderBook[orderId].buyer,
+            "Escrow: only buyer can confirm done"
         );
 
         require(
-            orderBook[appId][orderId].status == uint8(1) ||
-                orderBook[appId][orderId].status == uint8(2) ||
-                orderBook[appId][orderId].status == uint8(4),
-            "Order status must be equal to just paid or refund asked or dispute refused"
+            orderBook[orderId].status == uint8(1) ||
+                orderBook[orderId].status == uint8(2) ||
+                orderBook[orderId].status == uint8(4),
+            "Escrow: order status must be equal to just paid or refund asked or dispute refused"
         );
 
-        // cash out money to seller's balance
+        // send money to seller's balance
         userBalance[orderBook[orderId].seller][
             orderBook[orderId].coinAddress
         ] = userBalance[orderBook[orderId].seller][
@@ -362,7 +394,7 @@ contract Escrow is IEscrow, Ownable {
             true,
             orderBook[orderId].amount,
             orderBook[orderId].coinAddress,
-            appId,
+            orderBook[orderId].appId,
             orderId
         );
 
@@ -378,25 +410,25 @@ contract Escrow is IEscrow, Ownable {
     function askRefund(uint256 orderId, uint256 refund) public {
         require(
             _msgSender() == orderBook[orderId].buyer,
-            "Only buyer can make dispute"
+            "Escrow: only buyer can make dispute"
         );
 
         require(
             orderBook[orderId].status == uint8(1) ||
                 orderBook[orderId].status == uint8(2),
-            "Order status must be equal to just paid or refund asked"
+            "Escrow: order status must be equal to just paid or refund asked"
         );
 
         require(
             block.timestamp < orderBook[orderId].refundTime,
-            "It is too late to make dispute"
+            "Escrow: it is too late to make dispute"
         );
 
-        require(refund > 0, "Refund amount must be bigger than 0");
+        require(refund > 0, "Escrow: refund amount must be bigger than 0");
 
         require(
             refund <= orderBook[orderId].amount,
-            "Refund amount can not be bigger than paid amount"
+            "Escrow: refund amount can not be bigger than paid amount"
         );
 
         // update order status
@@ -418,13 +450,13 @@ contract Escrow is IEscrow, Ownable {
     function cancelRefund(uint256 orderId) public {
         require(
             _msgSender() == orderBook[orderId].buyer,
-            "Only buyer can cancel refund"
+            "Escrow: only buyer can cancel refund"
         );
 
         require(
             orderBook[orderId].status == uint8(2) ||
                 orderBook[orderId].status == uint8(4),
-            "Order status must be equal to refund asked or refund refused"
+            "Escrow: order status must be equal to refund asked or refund refused"
         );
 
         //update order status to paid
@@ -438,12 +470,12 @@ contract Escrow is IEscrow, Ownable {
     function refuseRefund(uint256 orderId) public {
         require(
             _msgSender() == orderBook[orderId].seller,
-            "Only seller can refuse dispute"
+            "Escrow: only seller can refuse dispute"
         );
 
         require(
             orderBook[orderId].status == uint8(2),
-            "Order status must be equal to refund asked"
+            "Escrow: order status must be equal to refund asked"
         );
 
         //update order status to refund refused
@@ -452,57 +484,60 @@ contract Escrow is IEscrow, Ownable {
         emit RefuseRefund(orderBook[orderId].appId, orderId);
     }
 
-    //appeal, so voters can vote
+    //escalate, so mods can vote
     //triggled by seller or buyer
-    function appeal(uint256 orderId) public {
+    function escalate(uint256 orderId) public {
         require(
             _msgSender() == orderBook[orderId].seller ||
                 _msgSender() == orderBook[orderId].buyer,
-            "Only seller or buyer can appeal"
+            "Escrow: only seller or buyer can escalate"
         );
 
         require(
             orderBook[orderId].status == uint8(4),
-            "Order status must be equal to refund refused by seller"
+            "Escrow: order status must be equal to refund refused by seller"
         );
 
-        //update order status to appeal dispute, ready for mods to vote
+        //update order status to escalate dispute, ready for mods to vote
         orderBook[orderId].status = uint8(5);
 
-        emit Appeal(orderBook[orderId].appId, orderId);
+        emit Escalate(orderBook[orderId].appId, orderId);
     }
 
     // if seller agreed refund, then refund immediately
-    // else the msg.sender must deposit 1000 DService coin into it to vote agree
+    // otherwise let mods or appOwner(if need) to judge
     function agreeRefund(uint256 orderId) public {
-        //if seller agreed refund, than refund immediately
+        //if seller agreed refund, then refund immediately
         if (_msgSender() == orderBook[orderId].seller) {
             require(
                 orderBook[orderId].status == uint8(2) ||
-                    orderBook[orderId].status == uint8(4),
-                "order status must be at refund asked or refund refused"
+                    orderBook[orderId].status == uint8(4) ||
+                    orderBook[orderId].status == uint8(5),
+                "Escrow: order status must be at refund asked or refund refused or dispute esclated"
             );
             sellerAgree(orderId);
         } else {
             require(
                 orderBook[orderId].status == uint8(5),
-                "mod can only vote on appealing status"
+                "Escrow: mod can only vote on dispute escalated status"
             );
-
+            address memory modAWallet   =   moderatorContract.getOwner(orderBook[orderId].modAId);
+            address memory modBWallet   =   moderatorContract.getOwner(orderBook[orderId].modBId);
             // if modA's owner equal to modB's owner and they are msg sender
             if (
-                moderatorContract.getOwner(orderBook[orderId].modAId) ==
-                moderatorContract.getOwner(orderBook[orderId].modBId)
+                modAWallet == modBWallet &&
+                modAWallet == _msgSender()
             ) {
                 // set modAVote/modBVote to voted
                 orderBook[orderId].modAVote = uint8(1);
                 orderBook[orderId].modBVote = uint8(1);
-                refundNow(orderId, true);
+                resolvedNow(orderId, true);
                 emit Vote(
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(0)
                 );
             }
             // if voter is app owner , and modA/modB not agree with each other.
@@ -513,18 +548,18 @@ contract Escrow is IEscrow, Ownable {
                     (orderBook[orderId].modAVote == uint8(2) &&
                         orderBook[orderId].modBVote == uint8(1)))
             ) {
-                refundNow(orderId, true);
+                resolvedNow(orderId, true);
                 emit Vote(
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(3)
                 );
             }
             // if voter is modA, and modA not vote yet, and modB not vote or vote disagree
             else if (
-                moderatorContract.getOwner(orderBook[orderId].modAId) ==
-                _msg.sender() &&
+                modAWallet ==  _msg.sender() &&
                 orderBook[orderId].modAVote == uint8(0) &&
                 (orderBook[orderId].modBVote == uint8(0) ||
                     orderBook[orderId].modBVote == uint8(2))
@@ -535,30 +570,30 @@ contract Escrow is IEscrow, Ownable {
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(1)
                 );
             }
             // if voter is modA, and modA not vote yet, and modB vote agree
             else if (
-                moderatorContract.getOwner(orderBook[orderId].modAId) ==
-                _msg.sender() &&
+                modAWallet == _msg.sender() &&
                 orderBook[orderId].modAVote == uint8(0) &&
                 orderBook[orderId].modBVote == uint8(1)
             ) {
                 // set modAVote to voted
                 orderBook[orderId].modAVote = uint8(1);
-                refundNow(orderId, true);
+                resolvedNow(orderId, true);
                 emit Vote(
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(1)
                 );
             }
             // if voter is modB, and modB not vote yet, and modA not vote or vote disagree
             else if (
-                moderatorContract.getOwner(orderBook[orderId].modBId) ==
-                _msg.sender() &&
+                modBWallet == _msg.sender() &&
                 orderBook[orderId].modBVote == uint8(0) &&
                 (orderBook[orderId].modAVote == uint8(0) ||
                     orderBook[orderId].modAVote == uint8(2))
@@ -569,29 +604,30 @@ contract Escrow is IEscrow, Ownable {
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(2)
                 );
             }
             // if voter is modB, and modB not vote yet, and modA vote agree
             else if (
-                moderatorContract.getOwner(orderBook[orderId].modBId) ==
-                _msg.sender() &&
+                modBWallet == _msg.sender() &&
                 orderBook[orderId].modBVote == uint8(0) &&
                 orderBook[orderId].modAVote == uint8(1)
             ) {
                 // set modBVote to voted
                 orderBook[orderId].modBVote = uint8(1);
-                refundNow(orderId, true);
+                resolvedNow(orderId, true);
                 emit Vote(
                     _msgSender(),
                     true,
                     orderId,
-                    orderBook[orderId].appId
+                    orderBook[orderId].appId,
+                    uint8(2)
                 );
             }
             // in other case , revert
             else {
-                revert("Sender can not vote!");
+                revert("Escrow: sender can not vote!");
             }
         }
     }
@@ -600,19 +636,27 @@ contract Escrow is IEscrow, Ownable {
     function disagreeRefund(uint256 orderId) public {
         require(
             orderBook[orderId].status == uint8(5),
-            "mod can only vote on appealing status"
+            "Escrow: mod can only vote on dispute escalated status"
         );
 
+        address memory modAWallet   =   moderatorContract.getOwner(orderBook[orderId].modAId);
+        address memory modBWallet   =   moderatorContract.getOwner(orderBook[orderId].modBId);
         // if modA's owner equal to modB's owner and they are msg sender
         if (
-            moderatorContract.getOwner(orderBook[orderId].modAId) ==
-            moderatorContract.getOwner(orderBook[orderId].modBId)
+            modAWallet == modBWallet && 
+            modAWallet == _msgSender()
         ) {
             // set modAVote/modBVote to voted
             orderBook[orderId].modAVote = uint8(2);
             orderBook[orderId].modBVote = uint8(2);
-            refundNow(orderId, false);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            resolvedNow(orderId, false);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(0)
+                );
         }
         // if voter is app owner , and modA/modB not agree with each other.
         else if (
@@ -622,60 +666,86 @@ contract Escrow is IEscrow, Ownable {
                 (orderBook[orderId].modAVote == uint8(1) &&
                     orderBook[orderId].modBVote == uint8(2)))
         ) {
-            refundNow(orderId, false);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            resolvedNow(orderId, false);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(3)
+                );
         }
         // if voter is modA, and modA not vote yet, and modB not vote or vote agree
         else if (
-            moderatorContract.getOwner(orderBook[orderId].modAId) ==
-            _msg.sender() &&
+            modAWallet == _msg.sender() &&
             orderBook[orderId].modAVote == uint8(0) &&
             (orderBook[orderId].modBVote == uint8(0) ||
                 orderBook[orderId].modBVote == uint8(1))
         ) {
             // set modAVote to voted
             orderBook[orderId].modAVote = uint8(2);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(1)
+                );
         }
         // if voter is modA, and modA not vote yet, and modB vote disagree
         else if (
-            moderatorContract.getOwner(orderBook[orderId].modAId) ==
-            _msg.sender() &&
+            modAWallet == _msg.sender() &&
             orderBook[orderId].modAVote == uint8(0) &&
             orderBook[orderId].modBVote == uint8(2)
         ) {
             // set modAVote to voted
             orderBook[orderId].modAVote = uint8(2);
-            refundNow(orderId, false);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            resolvedNow(orderId, false);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(1)
+                );
         }
         // if voter is modB, and modB not vote yet, and modA not vote or vote agree
         else if (
-            moderatorContract.getOwner(orderBook[orderId].modBId) ==
-            _msg.sender() &&
+            modBWallet == _msg.sender() &&
             orderBook[orderId].modBVote == uint8(0) &&
             (orderBook[orderId].modAVote == uint8(0) ||
                 orderBook[orderId].modAVote == uint8(1))
         ) {
             // set modBVote to voted
             orderBook[orderId].modBVote = uint8(2);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(2)
+                );
         }
         // if voter is modB, and modB not vote yet, and modA vote disagree
         else if (
-            moderatorContract.getOwner(orderBook[orderId].modBId) ==
-            _msg.sender() &&
+            modBWallet == _msg.sender() &&
             orderBook[orderId].modBVote == uint8(0) &&
             orderBook[orderId].modAVote == uint8(2)
         ) {
             // set modBVote to voted
             orderBook[orderId].modBVote = uint8(2);
-            refundNow(orderId, false);
-            emit Vote(_msgSender(), false, orderId, orderBook[orderId].appId);
+            resolvedNow(orderId, false);
+            emit Vote(
+                _msgSender(), 
+                false, 
+                orderId, 
+                orderBook[orderId].appId,
+                uint8(2)
+                );
         }
         // in other case , revert
         else {
-            revert("Sender can not vote!");
+            revert("Escrow: sender can not vote!");
         }
     }
 
@@ -689,11 +759,11 @@ contract Escrow is IEscrow, Ownable {
         // add app ownner commission fee
         userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress] =
         userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress].add(
-            orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100));
+            orderBook[orderId].amount.mul(finalCommission).div(100));
         emit UserBalanceChanged(
                 orderBook[orderId].appOwner,
                 true,
-                orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100),
+                orderBook[orderId].amount.mul(finalCommission).div(100),
                 orderBook[orderId].coinAddress,
                 orderBook[orderId].appId,
                 orderId
@@ -734,25 +804,27 @@ contract Escrow is IEscrow, Ownable {
                 orderId
             );
         }
-        emit RefundNow(orderBook[orderId].appId, orderId, uint8(1));
+        emit ResolvedNow(orderBook[orderId].appId, orderId, uint8(1));
     }
 
-    function refundNow(uint256 orderId, bool result) internal {
+    function resolvedNow(uint256 orderId, bool result) internal {
         // update order status to finish
         orderBook[orderId].status = uint8(3);
 
         // the mod who judge right decision will increase 1 score, as well as adding the mod commission
         uint8 modNum = 1;
         uint8 winVote = result ? 1 : 2;
+        // get the mod's owner wallet address
+        address memory modAWallet = moderatorContract.getOwner(orderBook[orderId].modAId);
+        address memory modBWallet = moderatorContract.getOwner(orderBook[orderId].modBId);
         // if modA's owner equal to modB's owner, then just increase 1 score for the owner
-        // and adding the mod commission
+        // and add the mod commission
         if (
-            moderatorContract.getOwner(orderBook[orderId].modAId) ==
-            moderatorContract.getOwner(orderBook[orderId].modBId)
+            modAWallet == modBWallet
         ) {
             rewardMod(
                 orderId,
-                moderatorContract.getOwner(orderBook[orderId].modAId)
+                modAWallet
             );
         }
         // else if modA does not agree with modB
@@ -773,12 +845,12 @@ contract Escrow is IEscrow, Ownable {
             if (orderBook[orderId].modAVote == winVote) {
                 rewardMod(
                     orderId,
-                    moderatorContract.getOwner(orderBook[orderId].modAId)
+                    modAWallet
                 );
             } else {
                 rewardMod(
                     orderId,
-                    moderatorContract.getOwner(orderBook[orderId].modBId)
+                    modBWallet
                 );
             }
         }
@@ -788,17 +860,17 @@ contract Escrow is IEscrow, Ownable {
             modNum = 2;
             rewardMod(
                 orderId,
-                moderatorContract.getOwner(orderBook[orderId].modAId)
+                modAWallet
             );
             rewardMod(
                 orderId,
-                moderatorContract.getOwner(orderBook[orderId].modBId)
+                modBWallet
             );
         }
         // caculate the commission fee
         uint256 finalCommission = orderBook[orderId].appOwnerCommission +
             (modNum * orderBook[orderId].modCommission);
-        // add app ownner commission fee
+        // send app owner commission fee
         userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress] =
         userBalance[orderBook[orderId].appOwner][orderBook[orderId].coinAddress].add(
             orderBook[orderId].amount.mul(orderBook[orderId].appOwnerCommission).div(100));
@@ -850,7 +922,7 @@ contract Escrow is IEscrow, Ownable {
                     orderId
                 );
             }
-            emit RefundNow(orderBook[orderId].appId, orderId, uint8(1));
+            emit ResolvedNow(orderBook[orderId].appId, orderId, uint8(1));
         } else {
             // send all the amount to the seller
             userBalance[orderBook[orderId].seller][
@@ -870,7 +942,7 @@ contract Escrow is IEscrow, Ownable {
                 orderBook[orderId].appId,
                 orderId
             );
-            emit RefundNow(orderBook[orderId].appId, orderId, uint8(0));
+            emit ResolvedNow(orderBook[orderId].appId, orderId, uint8(0));
         }
     }
 
@@ -891,10 +963,10 @@ contract Escrow is IEscrow, Ownable {
             );
     }
 
-    //seller want to cash out money from order to balance
+    //seller want to claim money from order to balance
     //or
-    //buyer want to cash out money after seller either not to refuse dispute or agree dispute
-    function cashOut(uint256 orderId) public {
+    //buyer want to claim money after seller either not to refuse dispute or agree dispute
+    function claim(uint256 orderId) public {
         // final commission is the app owner commission
         uint8 finalCommission = orderBook[orderId].appOwnerCommission;
         // add app ownner commission fee
@@ -909,16 +981,16 @@ contract Escrow is IEscrow, Ownable {
                 orderBook[orderId].appId,
                 orderId
             );
-        //seller cashout
+        //seller claim
         if (_msgSender() == orderBook[orderId].seller) {
             require(
                 orderBook[orderId].status == uint8(1),
-                "order status must be equal to 1 "
+                "Escrow: order status must be equal to 1 "
             );
 
             require(
-                block.timestamp > orderBook[orderId].cashOutTime,
-                "currently seller can not cash out, need to wait"
+                block.timestamp > orderBook[orderId].claimTime,
+                "Escrow: currently seller can not claim, need to wait"
             );
             // send all the amount to the seller
             userBalance[orderBook[orderId].seller][
@@ -940,16 +1012,16 @@ contract Escrow is IEscrow, Ownable {
             );
             
         } else if (_msgSender() == orderBook[orderId].buyer) {
-            // buyer cashout
+            // buyer claim
 
             require(
                 orderBook[orderId].status == uint8(2),
-                "order status must be equal to 2 "
+                "Escrow: order status must be equal to 2 "
             );
 
             require(
                 block.timestamp > refuseExpired[orderId],
-                "currently buyer can not cash out, need to wait"
+                "Escrow: currently buyer can not claim, need to wait"
             );
             // refund to buyer
             userBalance[orderBook[orderId].buyer][orderBook[orderId].coinAddress] = 
@@ -989,11 +1061,11 @@ contract Escrow is IEscrow, Ownable {
             }
             
         } else {
-            revert("only seller or buyer can cash out");
+            revert("Escrow: only seller or buyer can claim");
         }
 
         orderBook[orderId].status = 3;
-        emit CashOut(_msgSender(), orderBook[orderId].appId, orderId);
+        emit Claim(_msgSender(), orderBook[orderId].appId, orderId);
     }
 
     //withdraw from user balance
@@ -1001,7 +1073,7 @@ contract Escrow is IEscrow, Ownable {
         //get user balance
         uint256 _balance = userBalance[_msgSender()][_coinAddress];
 
-        require(_balance >= _amount, "Insufficient balance!");
+        require(_balance >= _amount, "Escrow: insufficient balance!");
 
         //descrease user balance
         userBalance[_msgSender()][_coinAddress] = _balance.sub(_amount);
@@ -1009,7 +1081,7 @@ contract Escrow is IEscrow, Ownable {
         //if the coin type is ETH
         if (_coinAddress == address(0)) {
             //check balance is enough
-            require(address(this).balance > _amount, "Insufficient balance");
+            require(address(this).balance > _amount, "Escrow: insufficient balance");
 
             msg.sender.transfer(_amount);
         } else {
