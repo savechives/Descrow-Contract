@@ -11,8 +11,14 @@ contract Moderator is IModerator, ERC721Metadata,Ownable {
     // max supply
     uint256 public maxSupply = 4000000; 
 
-    // mod's score
-    mapping(uint256 => uint256) public modScore;
+    // mod's total score
+    mapping(uint256 => uint256) public modTotalScore;
+
+    // mod's success score
+    mapping(uint256 => uint256) public modSuccessScore;
+
+    // mod's success rate
+    mapping(uint256 => uint8) public modSuccessRate;
 
     // mint event
     event Mint(
@@ -68,40 +74,25 @@ contract Moderator is IModerator, ERC721Metadata,Ownable {
         return ownerOf(modId);
     }
 
-    // increase mod's score
-    function increaseScore(uint256 modId, uint256 inScore) external returns(bool) {
+    // update mod's score
+    function updateModScore(uint256 modId, bool ifSuccess) external returns(bool) {
         //Only Escrow contract can increase score
-        require(escrowAddress == msg.sender,'Mod: only escrow contract can call this method');
-
-        //increase moderate score
-        modScore[modId] = inScore.add(modScore[modId]);
-
-        // emit event
-        emit IncreaseScore(
-            modId,
-            inScore
-        );
+        require(escrowAddress == msg.sender,'Mod: only escrow contract can update mod score');
+        //total score add 1
+        modTotalScore[modId] = modTotalScore[modId].add(1);
+        if(ifSuccess) {
+            // success score add 1
+            modSuccessScore[modId] = modSuccessScore[modId].add(1);
+        } else if(modSuccessScore[modId] > 0) {
+            modSuccessScore[modId] = modSuccessScore[modId].sub(1);
+        } else {
+            // nothing changed
+        }
+        // recount mod success rate
+        modSuccessRate[modId] = modSuccessScore[modId].mul(100).div(modTotalScore[modId]);
 
         return true;
-    }
 
-    // decrease mod's score
-    function decreaseScore(uint256 modId, uint256 deScore) external returns(bool) {
-        //Only Escrow contract can increase score
-        require(escrowAddress == msg.sender,'Mod: only escrow contract can call this method');
-
-        // The score of the mode must be bigger than deScore
-        require(modScore[modId] >= deScore, 'Mod: the score of the mode must be bigger than deScore');
-        //increase moderate score
-        modScore[modId] = deScore.sub(modScore[modId]);
-
-        // emit event
-        emit DecreaseScore(
-            modId,
-            deScore
-        );
-
-        return true;
     }
 
 }

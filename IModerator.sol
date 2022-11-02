@@ -8,9 +8,6 @@ interface IModerator {
     // get mod's total supply
     function getMaxModId() external returns(uint256);
 
-    // increase mod's score
-    function increaseScore(uint256 modId, uint256 inScore) external returns(bool);
-
-    // decrease mod's score
-    function decreaseScore(uint256 modId, uint256 deScore) external returns(bool);
+    // update mod's score
+    function updateModScore(uint256 modId, bool ifSuccess) external returns(bool);
 }

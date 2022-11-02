@@ -11,7 +11,7 @@ contract Escrow is IEscrow, Ownable {
     //moderator contract
     address public moderatorAddress;
 
-    IERC20 moderatorContract = IERC20(moderatorAddress);
+    IModerator moderatorContract = IModerator(moderatorAddress);
 
     // app owner
     // appId => address
@@ -19,15 +19,15 @@ contract Escrow is IEscrow, Ownable {
 
     //how many seconds after order paid, can buyer make dispute
     // appId => interval
-    mapping(uint256 => uint256) public appIntervalDispute;
+    mapping(uint256 => uint256) public intervalDispute;
 
     //how many seconds after order paid, can seller claim order
     // appId => interval
-    mapping(uint256 => uint256) public appIntervalClaim;
+    mapping(uint256 => uint256) public intervalClaim;
 
     //how many seconds after dispute made, if seller does not response, buyer can claim the refund
     // appId => interval
-    mapping(uint256 => uint256) public appIntervalRefuse;
+    mapping(uint256 => uint256) public intervalRefuse;
 
     // app uri
     // appId => string
@@ -44,13 +44,13 @@ contract Escrow is IEscrow, Ownable {
     uint256 public maxOrderId;
 
     // app mod commission (For each mod and app owner if possible)
-    mapping(uint256 => uint8) public appModCommission;
+    mapping(uint256 => uint8) public modCommission;
 
     // app owner commission
     mapping(uint256 => uint8) public appOwnerCommission;
 
     //after how many seconds, if seller does not refuse refund, buyer can claim the refund.
-    mapping(uint256 => mapping(uint256 => uint256)) public refuseExpired;
+    mapping(uint256 => uint256) public refuseExpired;
 
     //Struct Order
     struct Order {
@@ -163,6 +163,11 @@ contract Escrow is IEscrow, Ownable {
     // make the contract payable
     function() external payable {}
 
+    function getModAddress() external returns (address)
+    {
+        return moderatorAddress;
+    }
+
     // get total apps quantity
     function getTotalAppsQuantity() public view returns (uint256) {
         return maxAppNum;
@@ -183,7 +188,6 @@ contract Escrow is IEscrow, Ownable {
         appOwner[appId] = _appOwner;
         appURI[appId] = websiteURI;
         appName[appId] = _appName;
-        appMaxOrder[appId] = uint256(0);
         intervalDispute[appId] = uint256(1000000);
         intervalClaim[appId] = uint256(1000000);
         intervalRefuse[appId] = uint256(86400);
@@ -228,7 +232,7 @@ contract Escrow is IEscrow, Ownable {
     }
 
     //Set app owner commission
-    function setAppOwnerCommission(uint256 appId, uint256 _commission)
+    function setAppOwnerCommission(uint256 appId, uint8 _commission)
         public
         returns (bool)
     {
@@ -277,7 +281,7 @@ contract Escrow is IEscrow, Ownable {
     //Set claim interval
     function setIntervalClaim(uint256 appId, uint256 _seconds)
         public
-        return (bool)
+        returns (bool)
     {
         // Only app owner
         require(
@@ -438,9 +442,7 @@ contract Escrow is IEscrow, Ownable {
         // update refund of order
         orderBook[orderId].refund = refund;
         // update refuse expired
-        refuseExpired[orderId] = block.timestamp.add(
-            intervalRefuse[orderBook[orderId].appId]
-        );
+        refuseExpired[orderId] = block.timestamp.add(intervalRefuse[orderBook[orderId].appId]);
         //emit event
         emit AskRefund(orderBook[orderId].appId, orderId, refund);
     }
@@ -521,8 +523,8 @@ contract Escrow is IEscrow, Ownable {
                 orderBook[orderId].status == uint8(5),
                 "Escrow: mod can only vote on dispute escalated status"
             );
-            address memory modAWallet   =   moderatorContract.getOwner(orderBook[orderId].modAId);
-            address memory modBWallet   =   moderatorContract.getOwner(orderBook[orderId].modBId);
+            address modAWallet   =   moderatorContract.getModOwner(orderBook[orderId].modAId);
+            address modBWallet   =   moderatorContract.getModOwner(orderBook[orderId].modBId);
             // if modA's owner equal to modB's owner and they are msg sender
             if (
                 modAWallet == modBWallet &&
@@ -559,7 +561,7 @@ contract Escrow is IEscrow, Ownable {
             }
             // if voter is modA, and modA not vote yet, and modB not vote or vote disagree
             else if (
-                modAWallet ==  _msg.sender() &&
+                modAWallet ==  msg.sender &&
                 orderBook[orderId].modAVote == uint8(0) &&
                 (orderBook[orderId].modBVote == uint8(0) ||
                     orderBook[orderId].modBVote == uint8(2))
@@ -576,7 +578,7 @@ contract Escrow is IEscrow, Ownable {
             }
             // if voter is modA, and modA not vote yet, and modB vote agree
             else if (
-                modAWallet == _msg.sender() &&
+                modAWallet == msg.sender &&
                 orderBook[orderId].modAVote == uint8(0) &&
                 orderBook[orderId].modBVote == uint8(1)
             ) {
@@ -593,7 +595,7 @@ contract Escrow is IEscrow, Ownable {
             }
             // if voter is modB, and modB not vote yet, and modA not vote or vote disagree
             else if (
-                modBWallet == _msg.sender() &&
+                modBWallet == msg.sender &&
                 orderBook[orderId].modBVote == uint8(0) &&
                 (orderBook[orderId].modAVote == uint8(0) ||
                     orderBook[orderId].modAVote == uint8(2))
@@ -610,7 +612,7 @@ contract Escrow is IEscrow, Ownable {
             }
             // if voter is modB, and modB not vote yet, and modA vote agree
             else if (
-                modBWallet == _msg.sender() &&
+                modBWallet == msg.sender &&
                 orderBook[orderId].modBVote == uint8(0) &&
                 orderBook[orderId].modAVote == uint8(1)
             ) {
@@ -639,8 +641,8 @@ contract Escrow is IEscrow, Ownable {
             "Escrow: mod can only vote on dispute escalated status"
         );
 
-        address memory modAWallet   =   moderatorContract.getOwner(orderBook[orderId].modAId);
-        address memory modBWallet   =   moderatorContract.getOwner(orderBook[orderId].modBId);
+        address modAWallet   =   moderatorContract.getModOwner(orderBook[orderId].modAId);
+        address modBWallet   =   moderatorContract.getModOwner(orderBook[orderId].modBId);
         // if modA's owner equal to modB's owner and they are msg sender
         if (
             modAWallet == modBWallet && 
@@ -677,7 +679,7 @@ contract Escrow is IEscrow, Ownable {
         }
         // if voter is modA, and modA not vote yet, and modB not vote or vote agree
         else if (
-            modAWallet == _msg.sender() &&
+            modAWallet == msg.sender &&
             orderBook[orderId].modAVote == uint8(0) &&
             (orderBook[orderId].modBVote == uint8(0) ||
                 orderBook[orderId].modBVote == uint8(1))
@@ -694,7 +696,7 @@ contract Escrow is IEscrow, Ownable {
         }
         // if voter is modA, and modA not vote yet, and modB vote disagree
         else if (
-            modAWallet == _msg.sender() &&
+            modAWallet == msg.sender &&
             orderBook[orderId].modAVote == uint8(0) &&
             orderBook[orderId].modBVote == uint8(2)
         ) {
@@ -711,7 +713,7 @@ contract Escrow is IEscrow, Ownable {
         }
         // if voter is modB, and modB not vote yet, and modA not vote or vote agree
         else if (
-            modBWallet == _msg.sender() &&
+            modBWallet == msg.sender &&
             orderBook[orderId].modBVote == uint8(0) &&
             (orderBook[orderId].modAVote == uint8(0) ||
                 orderBook[orderId].modAVote == uint8(1))
@@ -728,7 +730,7 @@ contract Escrow is IEscrow, Ownable {
         }
         // if voter is modB, and modB not vote yet, and modA vote disagree
         else if (
-            modBWallet == _msg.sender() &&
+            modBWallet == msg.sender &&
             orderBook[orderId].modBVote == uint8(0) &&
             orderBook[orderId].modAVote == uint8(2)
         ) {
@@ -814,16 +816,17 @@ contract Escrow is IEscrow, Ownable {
         // the mod who judge right decision will increase 1 score, as well as adding the mod commission
         uint8 modNum = 1;
         uint8 winVote = result ? 1 : 2;
-        // get the mod's owner wallet address
-        address memory modAWallet = moderatorContract.getOwner(orderBook[orderId].modAId);
-        address memory modBWallet = moderatorContract.getOwner(orderBook[orderId].modBId);
-        // if modA's owner equal to modB's owner, then just increase 1 score for the owner
+        // get the mod's owneßr wallet address
+        address modAWallet = moderatorContract.getModOwner(orderBook[orderId].modAId);
+        address modBWallet = moderatorContract.getModOwner(orderBook[orderId].modBId);
+        // if modA's owner equal to modB's owner, then just increase 1 success score for the owner
         // and add the mod commission
         if (
             modAWallet == modBWallet
         ) {
             rewardMod(
                 orderId,
+                orderBook[orderId].modAId,
                 modAWallet
             );
         }
@@ -845,13 +848,17 @@ contract Escrow is IEscrow, Ownable {
             if (orderBook[orderId].modAVote == winVote) {
                 rewardMod(
                     orderId,
+                    orderBook[orderId].modAId,
                     modAWallet
                 );
+                moderatorContract.updateModScore(orderBook[orderId].modBId,false);
             } else {
                 rewardMod(
                     orderId,
+                    orderBook[orderId].modBId,
                     modBWallet
                 );
+                moderatorContract.updateModScore(orderBook[orderId].modAId,false);
             }
         }
         // else if modA agree with modB
@@ -860,10 +867,12 @@ contract Escrow is IEscrow, Ownable {
             modNum = 2;
             rewardMod(
                 orderId,
+                orderBook[orderId].modAId,
                 modAWallet
             );
             rewardMod(
                 orderId,
+                orderBook[orderId].modBId,
                 modBWallet
             );
         }
@@ -948,8 +957,8 @@ contract Escrow is IEscrow, Ownable {
 
     // reward mod
     // adding mod commission as well as increasing mod score
-    function rewardMod(uint256 orderId, address mod) private {
-        moderatorContract.increaseScore(mod, uint256(1));
+    function rewardMod(uint256 orderId, uint256 modId, address mod) private {
+        moderatorContract.updateModScore(modId, true);
         userBalance[mod][orderBook[orderId].coinAddress] = 
         userBalance[mod][orderBook[orderId].coinAddress].add(
             orderBook[orderId].amount.mul(orderBook[orderId].modCommission).div(100));
