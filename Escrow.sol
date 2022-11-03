@@ -160,10 +160,13 @@ contract Escrow is IEscrow, Ownable {
         uint256 orderId
     );
 
-    constructor() public {}
+    constructor(address _modAddress) public {
+            moderatorAddress    =   _modAddress;
+    }
 
     // make the contract payable
-    function() external payable {}
+    function() external payable {
+    }
 
     function getModAddress() external returns (address)
     {

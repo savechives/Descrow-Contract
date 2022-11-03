@@ -1,12 +1,14 @@
 pragma solidity ^0.5.16;
 
+import "./common/ERC721Enumerable.sol";
 import "./common/ERC721Metadata.sol";
 import "./common/Ownable.sol";
 import "./common/SafeMath.sol";
 import "./common/Address.sol";
 import "./IEscrow.sol";
+import "./IModerator.sol";
 
-contract Moderator is IModerator, ERC721Metadata,Ownable {
+contract Moderator is IModerator, ERC721Enumerable, ERC721Metadata,Ownable {
 
     // max supply
     uint256 public maxSupply = 4000000; 
@@ -25,22 +27,17 @@ contract Moderator is IModerator, ERC721Metadata,Ownable {
         uint256 indexed modId
     );
 
-    // increase score event
-    event increaseScore(
+    // update score event
+    event UpdateScore(
         uint256 indexed modId,
-        uint256 indexed inScore
-    );
-
-    // decrease score event
-    event increaseScore(
-        uint256 indexed modId,
-        uint256 indexed deScore
+        bool indexed ifSuccess
     );
 
     // escrow contract address
     address payable public escrowAddress;
 
-    constructor() public  ERC721Metadata("Escrow's Moderators", "Mod"){
+    constructor() public  ERC721Metadata("Vbhex Moderators", "Mod"){
+
     }
 
     // set escrow contract address
@@ -54,9 +51,9 @@ contract Moderator is IModerator, ERC721Metadata,Ownable {
     function mint() public onlyOwner {
         uint256 tokenId                     = totalSupply().add(1);
         require(tokenId <= maxSupply, 'Mod: supply reach the max limit!');
-        _safeMint(appOwner, tokenId);
+        _safeMint(_msgSender(), tokenId);
         // set default mod score
-        modScore[tokenId]   =   1;  
+        modTotalScore[tokenId]   =   1;  
         // emit mint event
         emit Mint(
             tokenId
@@ -89,8 +86,12 @@ contract Moderator is IModerator, ERC721Metadata,Ownable {
             // nothing changed
         }
         // recount mod success rate
-        modSuccessRate[modId] = modSuccessScore[modId].mul(100).div(modTotalScore[modId]);
-
+        modSuccessRate[modId] = uint8(modSuccessScore[modId].mul(100).div(modTotalScore[modId]));
+        // emit event
+        emit UpdateScore(
+            modId,
+            ifSuccess
+        );
         return true;
 
     }
