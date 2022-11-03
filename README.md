@@ -1,2 +1,2 @@
-# descrow
+# vbhex escrow
 Decentralized Escrow
