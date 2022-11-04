@@ -11,7 +11,7 @@ contract Escrow is IEscrow, Ownable {
     //moderator contract
     address public moderatorAddress;
 
-    IModerator moderatorContract = IModerator(moderatorAddress);
+    IModerator moderatorContract;
 
 
     // total app num
@@ -162,13 +162,15 @@ contract Escrow is IEscrow, Ownable {
 
     constructor(address _modAddress) public {
             moderatorAddress    =   _modAddress;
+            moderatorContract   =  IModerator(_modAddress);
+
     }
 
     // make the contract payable
     function() external payable {
     }
 
-    function getModAddress() external returns (address)
+    function getModAddress() external view returns (address)
     {
         return moderatorAddress;
     }
@@ -299,6 +301,14 @@ contract Escrow is IEscrow, Ownable {
         return true;
     }
 
+    function getMaxModId() public view returns (uint256) {
+       return moderatorContract.getMaxModId();
+    }
+
+    function getModOwner(uint256 modId) public view returns (address) {
+        return moderatorContract.getModOwner(modId);
+    }
+
     //Pay Order
     function payOrder(
         uint256 appId,
@@ -327,33 +337,23 @@ contract Escrow is IEscrow, Ownable {
             //send ERC20 to this contract
             buyCoinContract.transferFrom(_msgSender(), address(this), amount);
         }
-        uint256 orderId = maxOrderId.add(1);
+        maxOrderId = maxOrderId.add(1);
         // store order information
-        orderBook[orderId].appId = appId;
-        orderBook[orderId].coinAddress = coinAddress;
-        orderBook[orderId].amount = amount;
-        orderBook[orderId].buyer = _msgSender();
-        orderBook[orderId].seller = seller;
-        orderBook[orderId].createdTime = block.timestamp;
-        // disputeBook[orderId].refundTime = block.timestamp.add(intervalDispute[appId]);
-        orderBook[orderId].claimTime = block.timestamp.add(appIntervalClaim[appId]);
-        // disputeBook[orderId].refund = uint256(0);
-        orderBook[orderId].status = uint8(1);
-        orderBook[orderId].modAId = modAId;
-        // orderModAResolution[orderId] = uint8(0);
-        // disputeBook[orderId].modBId = modBId;
-        // orderModBResolution[orderId] = uint8(0);
-        // appOwner[orderBook[orderId].appId] = appOwner[appId];
-        // appModCommission[orderBook[orderId].appId] = modCommission[appId];
-        // appOwnerCommission[orderBook[orderId].appId] = appOwnerCommission[appId];
-        //update max order information
-        maxOrderId = orderId;
-        // record the app order id on blockchain. PS : No need any more.
-        // chainOrderIdOfAppOrderId[appId][appOrderId] = orderId;
+        Order memory _order;
+        _order.appId = appId;
+        _order.coinAddress = coinAddress;
+        _order.amount = amount;
+        _order.buyer = _msgSender();
+        _order.seller = seller;
+        _order.createdTime = block.timestamp;
+        _order.claimTime = block.timestamp.add(appIntervalClaim[appId]);
+        _order.status = uint8(1);
+        _order.modAId = modAId;
+        orderBook[maxOrderId] = _order;
 
         // emit event
         emit PayOrder(
-            orderId,
+            maxOrderId,
             appOrderId,
             coinAddress,
             amount,
@@ -363,7 +363,7 @@ contract Escrow is IEscrow, Ownable {
             modAId
         );
 
-        return orderId;
+        return maxOrderId;
     }
 
     //confirm order received, and money will be sent to seller's balance

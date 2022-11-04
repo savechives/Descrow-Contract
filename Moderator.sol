@@ -61,12 +61,12 @@ contract Moderator is IModerator, ERC721Enumerable, ERC721Metadata,Ownable {
     }
 
     // get mod's total supply
-    function getMaxModId() external returns(uint256) {
+    function getMaxModId() external view returns(uint256) {
         return totalSupply();
     }
 
     // get mod's owner
-    function getModOwner(uint256 modId) external returns(address) {
+    function getModOwner(uint256 modId) external view returns(address) {
         require(modId <= totalSupply(),'Mod: illegal moderator ID!');
         return ownerOf(modId);
     }
