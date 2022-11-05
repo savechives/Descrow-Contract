@@ -53,7 +53,7 @@ contract Moderator is IModerator, ERC721Enumerable, ERC721Metadata,Ownable {
         require(tokenId <= maxSupply, 'Mod: supply reach the max limit!');
         _safeMint(_msgSender(), tokenId);
         // set default mod score
-        modTotalScore[tokenId]   =   100;  
+        modTotalScore[tokenId]   =   1;  
         // emit mint event
         emit Mint(
             tokenId
