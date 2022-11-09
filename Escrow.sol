@@ -1,8 +1,6 @@
-pragma solidity ^0.5.16;
+pragma solidity ^0.8.0;
 
-import "./common/IERC20.sol";
-import "./common/Ownable.sol";
-import "./common/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./IEscrow.sol";
 import "./IModerator.sol";
 

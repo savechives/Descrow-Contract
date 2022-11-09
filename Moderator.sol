@@ -1,14 +1,10 @@
-pragma solidity ^0.5.16;
+pragma solidity ^0.8.0;
 
-import "./common/ERC721Enumerable.sol";
-import "./common/ERC721Metadata.sol";
-import "./common/Ownable.sol";
-import "./common/SafeMath.sol";
-import "./common/Address.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "./IEscrow.sol";
 import "./IModerator.sol";
 
-contract Moderator is IModerator, ERC721Enumerable, ERC721Metadata,Ownable {
+contract Moderator is IModerator, ERC721 {
 
     // max supply
     uint256 public maxSupply = 4000000; 

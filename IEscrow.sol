@@ -1,4 +1,4 @@
-pragma solidity ^0.5.16;
+pragma solidity ^0.8.0;
 
 interface IEscrow {
     function getModAddress() external view returns (address);
